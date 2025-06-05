@@ -1,5 +1,7 @@
-import { useParams, Link, useNavigate } from "react-router-dom";
+import { useParams, Link } from "react-router-dom";
 import { useState, useEffect } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { askGemini } from "../../shared/lib/askGemini";
 
 type Message = { id: number; text: string; fromMe: boolean };
 type ChatType = { name: string; messages: Message[] };
@@ -35,7 +37,7 @@ const LOCALSTORAGE_KEY_PREFIX = "chat_messages_";
 
 export const ChatList = () => {
   const [search, setSearch] = useState("");
-  const filteredChats = Object.entries(chatsData).filter(([id, chat]) =>
+  const filteredChats = Object.entries(chatsData).filter(([, chat]) =>
     chat.name.toLowerCase().includes(search.toLowerCase())
   );
 
@@ -69,41 +71,76 @@ export const Chat = () => {
   const chatIdNum = Number(chatId);
 
   const chat = chatsData[chatIdNum];
+  const isBotChat = chatIdNum === 101 || chatIdNum === 102;
 
-  const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
+  const queryClient = useQueryClient();
 
-  useEffect(() => {
-    if (!chat) return;
-    const saved = localStorage.getItem(LOCALSTORAGE_KEY_PREFIX + chatId);
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        setMessages(parsed);
-      } catch {
-        setMessages(chat.messages);
+  const { data: messages, isLoading, isError } = useQuery({
+    queryKey: ["chatMessages", chatIdNum],
+    queryFn: () => fetchChatMessages(chatIdNum),
+    enabled: !!chat,
+  });
+
+  // Мутация для отправки сообщения
+  const sendMessageMutation = useMutation({
+    mutationFn: async (text: string) => {
+      if (!chat) throw new Error("Чат не найден");
+      if (!text.trim()) return;
+
+      const currentMessages: Message[] = await fetchChatMessages(chatIdNum);
+      const userMessage: Message = {
+        id: currentMessages.length > 0 ? currentMessages[currentMessages.length - 1].id + 1 : 1,
+        text,
+        fromMe: true,
+      };
+      const updated = [...currentMessages, userMessage];
+      localStorage.setItem(LOCALSTORAGE_KEY_PREFIX + chatId, JSON.stringify(updated));
+
+      if (isBotChat) {
+        // Используем Gemini API для ответа бота
+        try {
+          const botReply = await askGemini(text);
+          const botMessage: Message = {
+            id: userMessage.id + 1,
+            text: botReply,
+            fromMe: false,
+          };
+          const updatedWithBot = [...updated, botMessage];
+          localStorage.setItem(LOCALSTORAGE_KEY_PREFIX + chatId, JSON.stringify(updatedWithBot));
+        } catch (e) {
+          console.error("Gemini error:", e);
+          const botMessage: Message = {
+            id: userMessage.id + 1,
+            text: "Ошибка ответа от Gemini",
+            fromMe: false,
+          };
+          const updatedWithBot = [...updated, botMessage];
+          localStorage.setItem(LOCALSTORAGE_KEY_PREFIX + chatId, JSON.stringify(updatedWithBot));
+        }
       }
-    } else {
-      setMessages(chat.messages);
-    }
-    setInput("");
-  }, [chatId, chat]);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["chatMessages", chatIdNum] });
+      setInput("");
+    },
+  });
 
-  const sendMessage = () => {
+  const handleSendMessage = () => {
     if (!input.trim()) return;
-    const newMessage: Message = {
-      id: messages.length > 0 ? messages[messages.length - 1].id + 1 : 1,
-      text: input,
-      fromMe: true,
-    };
-    const updatedMessages = [...messages, newMessage];
-    setMessages(updatedMessages);
-    localStorage.setItem(LOCALSTORAGE_KEY_PREFIX + chatId, JSON.stringify(updatedMessages));
-    setInput("");
+    sendMessageMutation.mutate(input);
   };
 
   if (!chat) {
     return <div className="p-4">Чат не найден</div>;
+  }
+
+  if (isLoading) {
+    return <div className="p-4">Загрузка сообщений...</div>;
+  }
+
+  if (isError) {
+    return <div className="p-4 text-red-500">Ошибка загрузки сообщений</div>;
   }
 
   return (
@@ -111,7 +148,7 @@ export const Chat = () => {
       <h2 className="text-xl font-bold mb-4">{chat.name}</h2>
 
       <div className="flex-1 overflow-auto mb-4 border rounded p-4 bg-white flex flex-col space-y-2">
-        {messages.map((msg) => (
+        {messages && messages.map((msg) => (
           <div
             key={msg.id}
             className={`
@@ -138,18 +175,33 @@ export const Chat = () => {
           onKeyDown={(e) => {
             if (e.key === "Enter") {
               e.preventDefault();
-              sendMessage();
+              handleSendMessage();
             }
           }}
         />
         <button
           className="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-50"
-          onClick={sendMessage}
-          disabled={!input.trim()}
+          onClick={handleSendMessage}
+          disabled={!input.trim() || sendMessageMutation.isPending}
         >
           Отправить
         </button>
       </div>
     </div>
   );
+};
+
+// Эмулируем асинхронный fetch сообщений чата
+export const fetchChatMessages = async (chatId: number): Promise<Message[]> => {
+  const chat = chatsData[chatId];
+  if (!chat) throw new Error("Чат не найден");
+  const saved = localStorage.getItem(LOCALSTORAGE_KEY_PREFIX + chatId);
+  if (saved) {
+    try {
+      return JSON.parse(saved);
+    } catch {
+      return chat.messages;
+    }
+  }
+  return chat.messages;
 };

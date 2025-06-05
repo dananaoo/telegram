@@ -1,4 +1,4 @@
-import "./app.css";
+
 import { Route, Routes } from "react-router";
 import { Wrapper } from "./ui/wrapper.tsx";
 import { Profile } from "../modules/profile/profile.tsx";

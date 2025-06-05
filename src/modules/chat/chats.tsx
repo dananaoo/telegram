@@ -1,5 +1,5 @@
-import { useParams } from "react-router-dom";
-import { useState, useEffect, useRef } from "react";
+import { useParams, Link, useNavigate } from "react-router-dom";
+import { useState, useEffect } from "react";
 
 type Message = { id: number; text: string; fromMe: boolean };
 type ChatType = { name: string; messages: Message[] };
@@ -33,6 +33,36 @@ const chatsData: Record<number, ChatType> = {
 
 const LOCALSTORAGE_KEY_PREFIX = "chat_messages_";
 
+export const ChatList = () => {
+  const [search, setSearch] = useState("");
+  const filteredChats = Object.entries(chatsData).filter(([id, chat]) =>
+    chat.name.toLowerCase().includes(search.toLowerCase())
+  );
+
+  return (
+    <div className="p-4 border-r h-full w-72 bg-gray-100 flex flex-col">
+      <input
+        className="mb-4 px-3 py-2 rounded border focus:outline-none"
+        placeholder="Поиск..."
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+      />
+      <div className="flex-1 overflow-auto">
+        {filteredChats.length === 0 && <p>Чаты не найдены</p>}
+        {filteredChats.map(([id, chat]) => (
+          <Link
+            key={id}
+            to={`/chat/${id}`}
+            className="block p-3 mb-2 rounded hover:bg-blue-200"
+          >
+            {chat.name}
+          </Link>
+        ))}
+      </div>
+    </div>
+  );
+};
+
 export const Chat = () => {
   const params = useParams<{ chatId: string }>();
   const chatId = params.chatId || "";
@@ -40,78 +70,80 @@ export const Chat = () => {
 
   const chat = chatsData[chatIdNum];
 
-  const loadMessages = (): Message[] => {
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [input, setInput] = useState("");
+
+  useEffect(() => {
+    if (!chat) return;
     const saved = localStorage.getItem(LOCALSTORAGE_KEY_PREFIX + chatId);
     if (saved) {
       try {
-        return JSON.parse(saved);
+        const parsed = JSON.parse(saved);
+        setMessages(parsed);
       } catch {
-        return chat?.messages || [];
+        setMessages(chat.messages);
       }
+    } else {
+      setMessages(chat.messages);
     }
-    return chat?.messages || [];
-  };
-
-  const [messages, setMessages] = useState<Message[]>(loadMessages());
-  const [input, setInput] = useState("");
-
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    setMessages(loadMessages());
     setInput("");
-  }, [chatId]);
+  }, [chatId, chat]);
 
-  useEffect(() => {
-    localStorage.setItem(LOCALSTORAGE_KEY_PREFIX + chatId, JSON.stringify(messages));
-    // Скроллим вниз при новых сообщениях
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, chatId]);
+  const sendMessage = () => {
+    if (!input.trim()) return;
+    const newMessage: Message = {
+      id: messages.length > 0 ? messages[messages.length - 1].id + 1 : 1,
+      text: input,
+      fromMe: true,
+    };
+    const updatedMessages = [...messages, newMessage];
+    setMessages(updatedMessages);
+    localStorage.setItem(LOCALSTORAGE_KEY_PREFIX + chatId, JSON.stringify(updatedMessages));
+    setInput("");
+  };
 
   if (!chat) {
     return <div className="p-4">Чат не найден</div>;
   }
 
-  const sendMessage = () => {
-    if (!input.trim()) return;
-    const newMessage = {
-      id: messages.length > 0 ? messages[messages.length - 1].id + 1 : 1,
-      text: input,
-      fromMe: true,
-    };
-    setMessages((prev) => [...prev, newMessage]);
-    setInput("");
-  };
-
   return (
-    <div className="flex flex-col h-full p-4">
+    <div className="flex flex-col h-full p-4 bg-gray-50 flex-1">
       <h2 className="text-xl font-bold mb-4">{chat.name}</h2>
 
-      <div className="flex-1 overflow-auto mb-4 border rounded p-4 bg-white">
+      <div className="flex-1 overflow-auto mb-4 border rounded p-4 bg-white flex flex-col space-y-2">
         {messages.map((msg) => (
           <div
             key={msg.id}
-            className={`mb-2 max-w-[70%] p-2 rounded ${
-              msg.fromMe ? "bg-[--primary-blue] text-white ml-auto" : "bg-gray-200 text-black"
-            }`}
+            className={`
+              max-w-[70%] px-4 py-2 rounded-lg break-words
+              ${msg.fromMe
+                ? "bg-blue-600 text-white self-end rounded-br-sm"
+                : "bg-gray-200 text-black self-start rounded-bl-sm"
+              }
+            `}
+            style={{ wordBreak: "break-word" }}
           >
             {msg.text}
           </div>
         ))}
-        <div ref={messagesEndRef} />
       </div>
 
       <div className="flex gap-2">
         <input
-          className="flex-1 border rounded px-3 py-2"
+          className="flex-1 border rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-400"
           type="text"
           value={input}
           onChange={(e) => setInput(e.target.value)}
           placeholder="Введите сообщение..."
-          onKeyDown={(e) => e.key === "Enter" && sendMessage()}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              sendMessage();
+            }
+          }}
         />
         <button
-          className="bg-blue-500 text-white px-4 py-2 rounded"
+          className="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-50"
           onClick={sendMessage}
           disabled={!input.trim()}
         >
